@@ -143,14 +143,20 @@ jobs:
 
       - name: Smoke test the controller image
         env:
+          BASE: ${{ steps.tags.outputs.base }}
           CONTROLLER: ${{ steps.tags.outputs.controller }}
         run: |
           docker run --rm --entrypoint /nginx-ingress-controller "$CONTROLLER" --version
           nginx_v=$(docker run --rm --entrypoint nginx "$CONTROLLER" -V 2>&1)
           echo "$nginx_v"
-          # The controller must run the nginx built here, not upstream's: it must be the version build.sh names.
           want=$(sed -n 's/^export NGINX_VERSION=//p' images/nginx/rootfs/build.sh)
           echo "$nginx_v" | grep -q "nginx version: nginx/${want}" || { echo "::error::expected nginx/${want}"; exit 1; }
+          # The version alone cannot tell the patched build from upstream's unpatched base (both are 1.27.1), so the
+          # controller's nginx binary must be byte-identical to the one in the base image built from images/nginx.
+          nginx_sum() { docker run --rm --entrypoint sh "$1" -c 'sha256sum "$(readlink -f "$(command -v nginx)")"' | cut -d' ' -f1; }
+          base_sum=$(nginx_sum "$BASE"); ctrl_sum=$(nginx_sum "$CONTROLLER")
+          echo "nginx sha256: base ${base_sum}, controller ${ctrl_sum}"
+          [ -n "$base_sum" ] && [ "$base_sum" = "$ctrl_sum" ] || { echo "::error::the controller's nginx is not the patched base's nginx"; exit 1; }
 
       - name: Push the images
         if: steps.tags.outputs.publish == 'true'
