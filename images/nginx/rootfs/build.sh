@@ -20,8 +20,8 @@ set -o pipefail
 
 export NGINX_VERSION=1.30.7
 
-# Check for recent changes: https://github.com/vision5/ngx_devel_kit/compare/v0.3.3...master
-export NDK_VERSION=v0.3.3
+# Check for recent changes: https://github.com/openresty/ngx_devel_kit/compare/v0.3.6...master
+export NDK_VERSION=v0.3.6
 
 # Check for recent changes: https://github.com/openresty/set-misc-nginx-module/compare/v0.33...master
 export SETMISC_VERSION=v0.34
@@ -50,8 +50,8 @@ export LUA_STREAM_NGX_VERSION=v0.0.20rc3
 # Check for recent changes: https://github.com/openresty/lua-upstream-nginx-module/compare/v0.07...master
 export LUA_UPSTREAM_VERSION=v0.08
 
-# Check for recent changes: https://github.com/openresty/lua-cjson/compare/2.1.0.14...master
-export LUA_CJSON_VERSION=2.1.0.14
+# Check for recent changes: https://github.com/openresty/lua-cjson/compare/2.1.0.20...master
+export LUA_CJSON_VERSION=2.1.0.20
 
 # Check for recent changes: https://github.com/leev/ngx_http_geoip2_module/compare/445df24ef3781e488cee3dfe8a1e111997fc1dfe...master
 export GEOIP2_VERSION=445df24ef3781e488cee3dfe8a1e111997fc1dfe
@@ -192,8 +192,8 @@ cd "$BUILD_PATH"
 get_src 2565b5c837050e958f70fb0f73c48e2bca4542ad349fd356f46fb0c72610bc6e \
         "https://nginx.org/download/nginx-$NGINX_VERSION.tar.gz"
 
-get_src aa961eafb8317e0eb8da37eb6e2c9ff42267edd18b56947384e719b85188f58b \
-        "https://github.com/vision5/ngx_devel_kit/archive/$NDK_VERSION.tar.gz" "ngx_devel_kit"
+get_src e3438a71130b63760ac4accec9f77ac8f91ad8f778e1940b061e9ea83dd62fe7 \
+        "https://github.com/openresty/ngx_devel_kit/archive/$NDK_VERSION.tar.gz" "ngx_devel_kit"
 
 get_src abc123 \
         "https://github.com/open-telemetry/opentelemetry-cpp/archive/$OPENTELEMETRY_CPP_VERSION.tar.gz" "opentelemetry-cpp"
@@ -240,7 +240,7 @@ get_src 16d72ed133f0c6df376a327386c3ef4e9406cf51003a700737c3805770ade7c5 \
 get_src fcd84dd01c8d589b0c1f68b11dd54c50d70d9b15d3f6e1a5760e970c4f99b7aa \
         "https://github.com/openresty/lua-resty-core/archive/$LUA_RESTY_CORE.tar.gz" "lua-resty-core"
 
-get_src a77b9de160d81712f2f442e1de8b78a5a7ef0d08f13430ff619f79235db974d4 \
+get_src a99fb872aa731274ac70453cd4e6b2e0e8fb978893063d512ca67c7c332510e1 \
         "https://github.com/openresty/lua-cjson/archive/$LUA_CJSON_VERSION.tar.gz" "lua-cjson"
 
 get_src 5ed48c36231e2622b001308622d46a0077525ac2f751e8cc0c9905914254baa4 \
