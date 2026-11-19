@@ -157,6 +157,10 @@ jobs:
           base_sum=$(nginx_sum "$BASE"); ctrl_sum=$(nginx_sum "$CONTROLLER")
           echo "nginx sha256: base ${base_sum}, controller ${ctrl_sum}"
           [ -n "$base_sum" ] && [ "$base_sum" = "$ctrl_sum" ] || { echo "::error::the controller's nginx is not the patched base's nginx"; exit 1; }
+          # And the check can tell the two apart: upstream's unpatched base (NGINX_BASE) must carry a different nginx.
+          upstream_sum=$(nginx_sum "$(cat NGINX_BASE)")
+          echo "nginx sha256: upstream unpatched base (NGINX_BASE) ${upstream_sum}"
+          [ -n "$upstream_sum" ] && [ "$upstream_sum" != "$base_sum" ] || { echo "::error::the patched nginx is identical to upstream's unpatched one"; exit 1; }
 
       - name: Push the images
         if: steps.tags.outputs.publish == 'true'
