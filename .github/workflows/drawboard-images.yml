@@ -1,0 +1,174 @@
+# Drawboard's build of the ingress-nginx controller.
+#
+# This fork tracks chainguard-forks/ingress-nginx (drawboard/main = a Chainguard controller-v* release). Chainguard
+# backports nginx security fixes as patches under images/nginx/rootfs/patches, but NGINX_BASE still names upstream's
+# unpatched base image (registry.k8s.io/ingress-nginx/nginx:v2.2.8). So the patches only reach a running controller if
+# the nginx base image is built from images/nginx here, and the controller is built on top of that base. That is what
+# this workflow does:
+#
+#   nginx-tests  nginx's own test suite against the patched nginx (images/nginx/tests).
+#   images       base image  dbprojectsus.azurecr.io/ingress-nginx/nginx:<images/nginx/TAG>-<tree hash of images/nginx>
+#                controller  dbprojectsus.azurecr.io/ingress-nginx/controller:<controller-v* tag>-<commit>
+#                The base is only rebuilt when images/nginx changes (its tag carries the tree hash). linux/amd64 only:
+#                every AKS node is amd64.
+#
+# Pull requests build and smoke-test both images without signing in or pushing. A push to drawboard/main, or a manual
+# run on it, pushes them.
+#
+# Setup (one-off, Azure/GitHub admin):
+#   - An Entra app or managed identity with AcrPush on the dbprojectsus registry, and a federated credential with
+#     subject repo:DrawboardLtd/ingress-nginx:ref:refs/heads/drawboard/main (only that branch can sign in).
+#   - Repository variables AZURE_CLIENT_ID, AZURE_TENANT_ID and AZURE_SUBSCRIPTION_ID (variables, not secrets: none of
+#     them is a credential; the OIDC federation is).
+#
+# Taking a new Chainguard release (e.g. controller-v1.15.17):
+#   git fetch chainguard --tags && git switch drawboard/main && git merge --ff-only controller-v1.15.17
+#   git push origin drawboard/main refs/tags/controller-v1.15.17
+# If the fast-forward fails because this branch carries our own commits (like this workflow), rebase them onto the
+# new tag instead. Push the tag too: the controller image is named after it.
+
+name: Drawboard images
+
+on:
+  push:
+    branches: [drawboard/main]
+  pull_request:
+    branches: [drawboard/main]
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: drawboard-images-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  ACR_NAME: dbprojectsus
+  REGISTRY: dbprojectsus.azurecr.io/ingress-nginx
+  PLATFORM: linux/amd64
+
+jobs:
+  nginx-tests:
+    name: NGINX / Tests (patched)
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Run nginx-tests against the patched nginx
+        run: make -C images/nginx test
+
+  images:
+    name: Images (build, smoke test, push)
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    needs: nginx-tests
+    permissions:
+      contents: read
+      id-token: write # azure/login by OIDC; only used when publishing
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0 # git describe needs the controller-v* tags
+          persist-credentials: false
+
+      - name: Image tags
+        id: tags
+        env:
+          PUBLISH: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/drawboard/main' }}
+        run: |
+          base_tag="$(cat images/nginx/TAG)-$(git rev-parse --short=12 HEAD:images/nginx)"
+          release=$(git describe --tags --match 'controller-v*' --abbrev=0 | sed 's/^controller-//')
+          ctrl_tag="${release}-$(git rev-parse --short=12 HEAD)"
+          {
+            echo "base=${REGISTRY}/nginx:${base_tag}"
+            echo "controller=${REGISTRY}/controller:${ctrl_tag}"
+            echo "ctrl_tag=${ctrl_tag}"
+            echo "publish=${PUBLISH}"
+          } >> "$GITHUB_OUTPUT"
+          echo "base image:       ${REGISTRY}/nginx:${base_tag}"
+          echo "controller image: ${REGISTRY}/controller:${ctrl_tag}"
+          echo "publish:          ${PUBLISH}"
+
+      - name: Sign in to Azure
+        if: steps.tags.outputs.publish == 'true'
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Sign in to the registry
+        if: steps.tags.outputs.publish == 'true'
+        run: az acr login --name "$ACR_NAME" --subscription "${{ vars.AZURE_SUBSCRIPTION_ID }}" --only-show-errors
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4.0.0
+        with:
+          # The docker driver builds into the local daemon: the controller build (make image, plain docker build) must
+          # see the base image built in the step before, which a docker-container builder would try to pull instead.
+          driver: docker
+
+      - name: Base image already in the registry?
+        id: base
+        env:
+          BASE: ${{ steps.tags.outputs.base }}
+        run: |
+          if [ "${{ steps.tags.outputs.publish }}" = "true" ] && docker manifest inspect "$BASE" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"; echo "$BASE is in the registry; not rebuilding it."
+            docker pull --platform "$PLATFORM" "$BASE"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build the nginx base image (with the patches)
+        if: steps.base.outputs.exists != 'true'
+        env:
+          BASE: ${{ steps.tags.outputs.base }}
+        run: |
+          cd images/nginx/rootfs
+          docker buildx build --platform "$PLATFORM" --load --progress plain -t "$BASE" .
+
+      - name: Build the controller image on that base
+        env:
+          BASE: ${{ steps.tags.outputs.base }}
+          CTRL_TAG: ${{ steps.tags.outputs.ctrl_tag }}
+        run: make ARCH=amd64 TAG="$CTRL_TAG" REGISTRY="$REGISTRY" BASE_IMAGE="$BASE" build image
+
+      - name: Smoke test the controller image
+        env:
+          CONTROLLER: ${{ steps.tags.outputs.controller }}
+        run: |
+          docker run --rm --entrypoint /nginx-ingress-controller "$CONTROLLER" --version
+          nginx_v=$(docker run --rm --entrypoint nginx "$CONTROLLER" -V 2>&1)
+          echo "$nginx_v"
+          # The controller must run the nginx built here, not upstream's: it must be the version build.sh names.
+          want=$(sed -n 's/^export NGINX_VERSION=//p' images/nginx/rootfs/build.sh)
+          echo "$nginx_v" | grep -q "nginx version: nginx/${want}" || { echo "::error::expected nginx/${want}"; exit 1; }
+
+      - name: Push the images
+        if: steps.tags.outputs.publish == 'true'
+        env:
+          BASE: ${{ steps.tags.outputs.base }}
+          CONTROLLER: ${{ steps.tags.outputs.controller }}
+        run: |
+          if [ "${{ steps.base.outputs.exists }}" != "true" ]; then docker push "$BASE"; fi
+          docker push "$CONTROLLER"
+          base_ref=$(docker inspect --format '{{index .RepoDigests 0}}' "$BASE")
+          ctrl_ref=$(docker inspect --format '{{index .RepoDigests 0}}' "$CONTROLLER")
+          {
+            echo "### Images pushed"
+            echo ""
+            echo "| | Tag | Digest reference |"
+            echo "|---|---|---|"
+            echo "| nginx base | \`$BASE\` | \`$base_ref\` |"
+            echo "| controller | \`$CONTROLLER\` | \`$ctrl_ref\` |"
+            echo ""
+            echo "Use the controller digest in bullclip-backend's ingress-nginx values (\`controller.image\`)."
+          } >> "$GITHUB_STEP_SUMMARY"
